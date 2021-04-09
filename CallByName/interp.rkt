@@ -70,7 +70,8 @@
            ; check arity matches
            (if (= (length xs) (length vs))
                (interp-env e (zip xs vs) ds)
-               'err)])]
+               'err)]
+          [_ 'err])]
        [_ 'err])]))
 
 ;; (Listof Expr) REnv Defns -> (Listof Value) | 'err
