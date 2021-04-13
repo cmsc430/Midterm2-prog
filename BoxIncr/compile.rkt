@@ -21,7 +21,10 @@
         (Label 'entry)
         (Mov rbx rdi) ; recv heap pointer
         (compile-e e '())
-        (Ret)))
+        (Ret)
+        (Label 'raise_error_align)
+        (Sub rsp 8)
+        (Jmp 'raise_error)))
 
 ;; Expr CEnv -> Asm
 (define (compile-e e c)
@@ -64,14 +67,14 @@
   (seq (compile-e e c)
        (match p
          ['add1
-          (seq (assert-integer rax)
+          (seq (assert-integer rax c)
                (Add rax (imm->bits 1)))]
          ['sub1
-          (seq (assert-integer rax)
+          (seq (assert-integer rax c)
                (Sub rax (imm->bits 1)))]         
          ['zero?
           (let ((l1 (gensym)))
-            (seq (assert-integer rax)
+            (seq (assert-integer rax c)
                  (Cmp rax 0)
                  (Mov rax val-true)
                  (Je l1)
@@ -87,17 +90,17 @@
                  (Mov rax val-false)
                  (Label l1)))]
          ['char->integer
-          (seq (assert-char rax)
+          (seq (assert-char rax c)
                (Sar rax char-shift)
                (Sal rax int-shift))]
          ['integer->char
-          (seq assert-codepoint
+          (seq (assert-codepoint rax c)
                (Sar rax int-shift)
                (Sal rax char-shift)
                (Xor rax type-char))]
          ['eof-object? (eq-imm val-eof)]
          ['write-byte
-          (seq assert-byte
+          (seq (assert-byte rax c)
                (pad-stack c)
                (Mov rdi rax)
                (Call 'write_byte)
@@ -109,15 +112,15 @@
                (Or rax type-box)
                (Add rbx 8))]
          ['unbox
-          (seq (assert-box rax)
+          (seq (assert-box rax c)
                (Xor rax type-box)
                (Mov rax (Offset rax 0)))]
          ['car
-          (seq (assert-cons rax)
+          (seq (assert-cons rax c)
                (Xor rax type-cons)
                (Mov rax (Offset rax 8)))]
          ['cdr
-          (seq (assert-cons rax)
+          (seq (assert-cons rax c)
                (Xor rax type-cons)
                (Mov rax (Offset rax 0)))]
          ['empty? (eq-imm val-empty)]
@@ -140,13 +143,13 @@
        (match p
          ['+
           (seq (Pop r8)
-               (assert-integer r8)
-               (assert-integer rax)
+               (assert-integer r8 c)
+               (assert-integer rax c)
                (Add rax r8))]
          ['-
           (seq (Pop r8)
-               (assert-integer r8)
-               (assert-integer rax)
+               (assert-integer r8 c)
+               (assert-integer rax c)
                (Sub r8 rax)
                (Mov rax r8))]
          ['eq?
@@ -223,11 +226,11 @@
        [#f (+ 8 (lookup x rest))])]))
 
 (define (assert-type mask type)
-  (λ (arg)
+  (λ (arg c)
     (seq (Mov r9 arg)
          (And r9 mask)
          (Cmp r9 type)
-         (Jne 'raise_error))))
+         (Jne (error-label c)))))
 
 (define (type-pred mask type)
   (let ((l (gensym)))
@@ -247,24 +250,30 @@
 (define assert-cons
   (assert-type ptr-mask type-cons))
 
-(define assert-codepoint
+(define (assert-codepoint arg c)
   (let ((ok (gensym)))
-    (seq (assert-integer rax)
-         (Cmp rax (imm->bits 0))
-         (Jl 'raise_error)
-         (Cmp rax (imm->bits 1114111))
-         (Jg 'raise_error)
-         (Cmp rax (imm->bits 55295))
+    (seq (assert-integer arg c)
+         (Cmp arg (imm->bits 0))
+         (Jl (error-label c))
+         (Cmp arg (imm->bits 1114111))
+         (Jg (error-label c))
+         (Cmp arg (imm->bits 55295))
          (Jl ok)
-         (Cmp rax (imm->bits 57344))
+         (Cmp arg (imm->bits 57344))
          (Jg ok)
-         (Jmp 'raise_error)
+         (Jmp (error-label c))
          (Label ok))))
        
-(define assert-byte
-  (seq (assert-integer rax)
-       (Cmp rax (imm->bits 0))
-       (Jl 'raise_error)
-       (Cmp rax (imm->bits 255))
-       (Jg 'raise_error)))
-       
+(define (assert-byte arg c)
+  (seq (assert-integer arg c)
+       (Cmp arg (imm->bits 0))
+       (Jl (error-label c))
+       (Cmp arg (imm->bits 255))
+       (Jg (error-label c))))
+
+;; CEnv -> Label
+;; Determine correct error handler label to jump to.
+(define (error-label c)
+  (match (even? (length c))
+    [#t 'raise_error]
+    [#f 'raise_error_align]))
